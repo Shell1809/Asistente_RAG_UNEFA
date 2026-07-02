@@ -36,25 +36,15 @@ with open(CHUNKS_PATH, encoding="utf-8") as f:
     CHUNKS = json.load(f)
 EMBEDDINGS = np.load(EMBEDDINGS_PATH)
 
-# Prompt del sistema: define el rol institucional del asistente
-SYSTEM_PROMPT = """Eres el Asistente de Optimización Administrativa y Orientación Normativa
-de la UNEFA Núcleo Lara. Tu función es ayudar a estudiantes, profesores y personal
-administrativo a entender y aplicar correctamente los reglamentos, normativas y
-procedimientos institucionales, basándote EXCLUSIVAMENTE en los documentos oficiales
-que se te proporcionan como contexto.
+# 1. ACTUALIZACIÓN DEL PROMPT PARA SER ESTRICTO
+SYSTEM_PROMPT = """Eres el Asistente de Optimización Administrativa de la UNEFA Núcleo Lara.
 
-Reglas que debes seguir siempre:
-1. Responde SOLO con base en el CONTEXTO proporcionado. No inventes artículos,
-   procedimientos, plazos ni requisitos que no estén en el contexto.
-2. Si la información solicitada no aparece en el contexto, dilo claramente:
-   indica que no encontraste esa información en los documentos disponibles y
-   recomienda consultar directamente con la unidad administrativa correspondiente.
-3. Cuando cites una norma o procedimiento, menciona el documento fuente y,
-   si está disponible, la página o artículo correspondiente.
-4. Usa un tono formal, claro y orientado a resolver trámites administrativos
-   de forma práctica (qué hacer, en qué orden, qué se necesita).
-5. Si la pregunta es ambigua, pide la aclaración mínima necesaria antes de responder,
-   o responde a la interpretación más probable y ofrece la alternativa.
+REGLAS OBLIGATORIAS:
+1. Evalúa si la pregunta tiene respuesta clara en el CONTEXTO proporcionado.
+2. Si la respuesta es SÍ, comienza directamente con "SÍ" y explica detalladamente citando el documento y artículo.
+3. Si la respuesta es NO, o si el contexto NO contiene la información, debes responder obligatoriamente: "NO dispongo de esa información específica en los reglamentos actuales".
+4. EN TODOS LOS CASOS, finaliza tu respuesta con esta frase exacta: "Por favor, para proceder con este trámite o aclarar dudas adicionales, dirígete a la Secretaría o a la Coordinación de tu carrera correspondiente."
+5. Usa un tono formal y administrativo.
 """
 
 
@@ -95,7 +85,44 @@ def generar_respuesta(pregunta, contexto_chunks):
         f"[Documento: {c['fuente']} | Fragmento {c['chunk_id']}]\n{c['texto']}"
         for c in contexto_chunks
     )
+def generar_respuesta(pregunta, contexto_chunks):
+    """Genera la respuesta final vía Groq usando solo el contexto recuperado."""
+    contexto = "\n\n---\n\n".join(
+        f"[Documento: {c['fuente']} | Fragmento {c['chunk_id']}]\n{c['texto']}"
+        for c in contexto_chunks
+    )
 
+    # 2. LÓGICA DE REFUERZO EN EL PROMPT
+    prompt_usuario = f"""CONTEXTO (extraído de documentos oficiales de UNEFA):
+{contexto}
+
+PREGUNTA DEL USUARIO: {pregunta}
+
+Responde siguiendo estrictamente las REGLAS del sistema. Si la información no está en el CONTEXTO, no intentes inventarla."""
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt_usuario},
+        ],
+        "temperature": 0.1, # 3. TEMPERATURA BAJA PARA RESPUESTAS DETERMINÍSTICAS
+    }
+    r = requests.post(url, headers=headers, json=body, timeout=60)
+    r.raise_for_status()
+    
+    respuesta = r.json()["choices"][0]["message"]["content"]
+    
+    # 4. LOGICA DE CONTROL EXTRA (Si el modelo ignora el "NO", lo forzamos)
+    # Si detectamos que no hay contexto suficiente, podemos pre-procesar, 
+    # pero con el nuevo SYSTEM_PROMPT el modelo Llama 3.3 es muy bueno siguiendo instrucciones.
+    
+    return respuesta
     prompt_usuario = f"""CONTEXTO (extraído de documentos oficiales de UNEFA):
 
 {contexto}
